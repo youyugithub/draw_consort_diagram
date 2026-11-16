@@ -1,16 +1,16 @@
 # draw_consort_diagram
 
 ```
+
 library(grid)
 
-# Numeric values are interpreted as "lines"
 .u <- function(x) if (is.unit(x)) x else unit(x, "lines")
 
 # ============================================================
 # Box
 # ============================================================
 
-myboxGrob <- function(label, x = 5, y = 5, width = NULL, height = 3,
+myboxGrob <- function(label, x = 5, y = 5, width = NULL, height = 2,
                       left = NULL, right = NULL, top = NULL, bottom = NULL) {
   
   if (!is.null(left) && !is.null(right)) {
@@ -39,22 +39,12 @@ drawDetails.mybox <- function(x, ...) {
   grid.text(x$label, x$x, x$y)
 }
 
-xDetails.mybox <- function(x, theta) {
-  grobX(rectGrob(x = x$x, y = x$y,
-                 width = x$width, height = x$height), theta)
-}
-
-yDetails.mybox <- function(x, theta) {
-  grobY(rectGrob(x = x$x, y = x$y,
-                 width = x$width, height = x$height), theta)
-}
-
 # ============================================================
 # Arrow
 # ============================================================
 
 myarrowGrob <- function(mybox_from, mybox_to,
-                        theta_from = "south", theta_to = "north",
+                        side_from = "d", side_to = "u",
                         curve = "-V-", offset = 1) {
   
   parts <- regmatches(
@@ -62,59 +52,55 @@ myarrowGrob <- function(mybox_from, mybox_to,
   )[[1]]
   
   if (length(parts) != 4)
-    stop("Invalid curve syntax")
+    stop("Invalid curve syntax. Example: 'dl-HVH-ld'")
   
-  # All calculations use numeric coordinates in lines
-  offset <- convertHeight(.u(offset), "lines", valueOnly = TRUE)
-  pageheight <- convertHeight(unit(1, "npc"), "lines", valueOnly = TRUE)
+  offset <- .u(offset)
+  
   
   # ----------------------------------------------------------
-  # 1. Boundary and lowercase movements
+  # 1. Boundary point -> outward offset -> lowercase moves
   # ----------------------------------------------------------
   
-  side <- function(box, theta, moves) {
+  side <- function(box, direction, moves) {
     
-    angle <- if (is.character(theta))
-      c(east = 0, north = 90, west = 180, south = 270)[tolower(theta)]
-    else theta
+    if (!direction %in% c("u", "d", "l", "r"))
+      stop("Side must be one of: u, d, l, r")
     
-    if (length(angle) != 1 || is.na(angle))
-      stop("Invalid theta")
-    
-    angle <- angle * pi / 180
-    
-    # Convert grid coordinates into numeric coordinates
-    # Origin: top-left; y increases downward
-    p <- list(
-      x = convertX(grobX(box, theta), "lines", valueOnly = TRUE),
-      y = pageheight - convertY(grobY(box, theta), "lines",
-                                valueOnly = TRUE)
+    # Boundary coordinates
+    p <- switch(direction,
+                u = list(x = box$x, y = box$y + box$height / 2),
+                d = list(x = box$x, y = box$y - box$height / 2),
+                l = list(x = box$x - box$width / 2, y = box$y),
+                r = list(x = box$x + box$width / 2, y = box$y)
     )
-    
-    width <- convertWidth(box$width, "lines", valueOnly = TRUE)
-    height <- convertHeight(box$height, "lines", valueOnly = TRUE)
     
     pts <- list(p)
     
-    # Outward offset
-    p$x <- p$x + offset * cos(angle)
-    p$y <- p$y - offset * sin(angle)
+    # Stretch outward by offset
+    if (direction == "u") p$y <- p$y + offset
+    if (direction == "d") p$y <- p$y - offset
+    if (direction == "l") p$x <- p$x - offset
+    if (direction == "r") p$x <- p$x + offset
     
     pts[[length(pts) + 1]] <- p
     
-    # Additional lowercase movements
+    # Lowercase movements around the box
     for (s in strsplit(moves, "")[[1]]) {
-      if (s == "l") p$x <- p$x - width / 2 - offset
-      if (s == "r") p$x <- p$x + width / 2 + offset
-      if (s == "u") p$y <- p$y - height / 2 - offset
-      if (s == "d") p$y <- p$y + height / 2 + offset
+      
+      if (s == "u") p$y <- p$y + box$height / 2 + offset
+      if (s == "d") p$y <- p$y - box$height / 2 - offset
+      if (s == "l") p$x <- p$x - box$width / 2 - offset
+      if (s == "r") p$x <- p$x + box$width / 2 + offset
+      
       pts[[length(pts) + 1]] <- p
     }
+    
     pts
   }
   
-  from <- side(mybox_from, theta_from, parts[2])
-  to   <- side(mybox_to, theta_to, parts[4])
+  from <- side(mybox_from, side_from, parts[2])
+  to   <- side(mybox_to, side_to, parts[4])
+  
   
   # ----------------------------------------------------------
   # 2. Middle route
@@ -131,13 +117,6 @@ myarrowGrob <- function(mybox_from, mybox_to,
   nH <- sum(horizontal)
   nV <- sum(vertical)
   
-  # Prevent diagonal joins caused by missing directions
-  if (nH == 0 && abs(a$x - b$x) > 1e-8)
-    stop("Middle route needs H: endpoints have different x coordinates")
-  
-  if (nV == 0 && abs(a$y - b$y) > 1e-8)
-    stop("Middle route needs V: endpoints have different y coordinates")
-  
   p <- a
   middle <- list(p)
   
@@ -145,13 +124,19 @@ myarrowGrob <- function(mybox_from, mybox_to,
   v <- 0
   
   for (i in seq_along(steps)) {
+    
     if (horizontal[i]) {
+      
       h <- h + 1
       p$x <- a$x + (b$x - a$x) * h / nH
+      
     } else {
+      
       v <- v + 1
       p$y <- a$y + (b$y - a$y) * v / nV
+      
     }
+    
     middle[[length(middle) + 1]] <- p
   }
   
@@ -161,9 +146,15 @@ myarrowGrob <- function(mybox_from, mybox_to,
   # ----------------------------------------------------------
   
   pts <- c(from, middle[-1], rev(to)[-1])
+  
+  
+  # ----------------------------------------------------------
+  # 4. Draw polyline
+  # ----------------------------------------------------------
+  
   polylineGrob(
-    x = do.call(unit.c, lapply(pts, function(p) .u(p$x))),
-    y = do.call(unit.c, lapply(pts, function(p) unit(1, "npc") - .u(p$y))),
+    x = do.call(unit.c, lapply(pts, `[[`, "x")),
+    y = do.call(unit.c, lapply(pts, `[[`, "y")),
     arrow = arrow(type = "closed", ends = "last",
                   angle = 15, length = .u(0.6)),
     gp = gpar(lwd = 1.5)
@@ -171,29 +162,19 @@ myarrowGrob <- function(mybox_from, mybox_to,
 }
 
 
-
 grid.newpage()
 
-a <- myboxGrob("Assessed for eligibility",
-               x = 12, y = 4, width = 10)
+a <- myboxGrob("Box A", x = 8, y = 5, width = 8)
+b <- myboxGrob("Box B", x = 20, y = 13, width = 8)
 
-b <- myboxGrob("Excluded",
-               x = 30, y = 12, width = 10)
-
-c <- myboxGrob("Randomized",
-               x = 12, y = 20, width = 10)
-
-grid.draw(myarrowGrob(a, b,
-                      theta_from = "east",
-                      theta_to = "west",
-                      curve = "d-HVH-u"))
-
-grid.draw(myarrowGrob(a, c,
-                      theta_from = "south",
-                      theta_to = "north",
-                      curve = "-V-"))
-```
+grid.draw(myarrowGrob(
+  a, b,
+  side_from = "r",
+  side_to = "l",
+  curve = "dl-VHV-ur"
+))
 
 grid.draw(a)
 grid.draw(b)
-grid.draw(c)
+```
+
